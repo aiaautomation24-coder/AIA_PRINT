@@ -1,0 +1,19 @@
+{
+  "name": "AIA Print Schedule",
+  "short_name": "AIA Schedule",
+  "description": "AIA Printing Schedule - Production Planning Tool",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#EEF2F8",
+  "theme_color": "#0D1B2A",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
