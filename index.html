@@ -1447,7 +1447,14 @@ function parseJobs(rows){
     // RM Status / Board Status — "Avl." / "Available" = material available → schedule first
     const rmRaw=String(gv(r,'BoardStatus','Board\nStatus ','Board Status','rm status UPDATE 1.7.2024')||'').trim().toLowerCase();
     const rmAvailable = rmRaw.includes('avl') || rmRaw.includes('available') || rmRaw.includes('yes');
-    clean.push({
+    // FrontColor / BackColor (Track Record cols BO/BP) — read for export + double-job detection
+    // NOTE: use explicit empty/undefined check, not `||''`, because gv() can return
+    // the number 0 (valid BackColor=0 value) which `0||''` would wrongly blank out.
+    const frontColorRaw=gv(r,'FrontColor','Front Color','FrontColour','Front Colour');
+    const backColorRaw=gv(r,'BackColor','Back Color','BackColour','Back Colour');
+    const frontColor=(frontColorRaw===''||frontColorRaw===undefined)?'':String(frontColorRaw).trim();
+    const backColor=(backColorRaw===''||backColorRaw===undefined)?'':String(backColorRaw).trim();
+    const job={
       jcno, code:String(gv(r,'code','Code')||'').trim(),
       name:String(gv(r,'JobName','Job Name')||'').trim(),
       cust:String(gv(r,'CUSTOMER NAME','Customer Name')||'').trim(),
@@ -1458,6 +1465,7 @@ function parseJobs(rows){
       coatDetail:String(gv(r,'CoatDetail')||'').replace(/[\r\n]+/g,' ').trim(),
       lamDetail:String(gv(r,'LamDetail')||'').replace(/[\r\n]+/g,' ').trim(),
       urgent:false, rmAvailable,
+      frontColor, backColor,
       revDate: (()=>{
         // Direct fuzzy scan on all row keys — handles any spelling/spacing variant
         const rkeys = Object.keys(r);
@@ -1489,7 +1497,17 @@ function parseJobs(rows){
         if(!isNaN(p2.getTime())) return dk(p2);
         return s;
       })(),
-    });
+    };
+    clean.push(job);
+    // ── DOUBLE JOB (additive) ──────────────────────────────────────────
+    // BackColor (Track Record col BP) >= 2 → job runs through machine TWICE
+    // (back-side print pass). Add a duplicate copy with the SAME jcno so it
+    // is scheduled a second time and shows up again as the same Doc ID in
+    // the schedule + export. Existing single-pass jobs are unaffected.
+    const backColorNum=parseFloat(backColor);
+    if(!isNaN(backColorNum) && backColorNum>=2){
+      clean.push({...job, _doubleCopy:true});
+    }
   });
   showPg2();
 }
@@ -3364,6 +3382,7 @@ function exportExcel(_extWb, _sheetSuffix, _filename){
     CENT: {font:{sz:9},alignment:{horizontal:'center',vertical:'center',wrapText:true}},
     NORM: {font:{sz:9},alignment:{vertical:'center',wrapText:true}},
     BLANK:{font:{sz:9},fill:{fgColor:{rgb:'F5F8FC'}}},
+    TOTAL:{font:{bold:true,sz:9,color:{rgb:'0D1B2A'}},fill:{fgColor:{rgb:'E2E8F0'}},alignment:{horizontal:'center',vertical:'center'},border:{top:{style:'thin',color:{rgb:'000000'}},bottom:{style:'thin',color:{rgb:'000000'}},left:{style:'thin',color:{rgb:'000000'}},right:{style:'thin',color:{rgb:'000000'}}}},
     COLGP:{font:{bold:true,sz:9,color:{rgb:'374151'}},fill:{fgColor:{rgb:'EEF2F8'}},alignment:{vertical:'center'}},
   };
 
@@ -3406,6 +3425,8 @@ function exportExcel(_extWb, _sheetSuffix, _filename){
     {k:'psdate',lbl:'Print Date', w:14},
     {k:'etime', lbl:'Complete',   w:12},
     {k:'edate', lbl:'End Date',   w:14},
+    {k:'fcolor',lbl:'FrontColor', w:12},
+    {k:'bcolor',lbl:'BackColor',  w:12},
   ];
   const NC=COLS.length;
 
@@ -3431,6 +3452,7 @@ function exportExcel(_extWb, _sheetSuffix, _filename){
   sheets.forEach(sh=>{
     const ws={};
     let row=0;
+    let firstHdrRow=null; // track row index of first column-header row for AutoFilter
 
     // Title row
     sc(ws,row,0,`AIA INDUSTRIES — PRINTING SCHEDULE — ${fd} – ${td}`,S.TITLE);
@@ -3483,6 +3505,7 @@ function exportExcel(_extWb, _sheetSuffix, _filename){
         row++;
 
         // Column headers
+        if(firstHdrRow===null) firstHdrRow=row;
         COLS.forEach((col,ci)=>sc(ws,row,ci,col.lbl,S.HDR));
         row++;
 
@@ -3528,7 +3551,7 @@ function exportExcel(_extWb, _sheetSuffix, _filename){
           }
 
           const vals=[
-            sr++,
+            j.sr,
             j.jcno,
             j.code||'',
             j.name,
@@ -3555,6 +3578,8 @@ function exportExcel(_extWb, _sheetSuffix, _filename){
             j.psDate,
             j.eTime,
             j.eDate,
+            j.frontColor||'',
+            j.backColor||'',
           ];
 
           vals.forEach((v,ci)=>{
@@ -3577,6 +3602,16 @@ function exportExcel(_extWb, _sheetSuffix, _filename){
           row++;
         });
 
+        // TOTAL row — daywise/machine-wise Qty & Cut Sheet totals
+        sc(ws,row,0,'TOTAL',S.TOTAL);
+        merge(ws,row,0,row,4);
+        for(let ci=1;ci<NC;ci++){
+          if(ci===5) sc(ws,row,ci,mq,{...S.TOTAL,t:'n'});
+          else if(ci===6) sc(ws,row,ci,ms,{...S.TOTAL,t:'n'});
+          else sc(ws,row,ci,'',S.TOTAL);
+        }
+        row++;
+
         // Blank separator after machine block
         for(let ci=0;ci<NC;ci++) sc(ws,row,ci,'',S.BLANK);
         row++;
@@ -3593,6 +3628,10 @@ function exportExcel(_extWb, _sheetSuffix, _filename){
     for(let ri=0;ri<row;ri++) ws['!rows'][ri]={hpt:18};
     // Sheet ref
     ws['!ref']='A1:'+XLSX.utils.encode_col(NC-1)+(row);
+    // Normal Excel filter (dropdown arrows) on the first column-header row
+    if(firstHdrRow!==null){
+      ws['!autofilter']={ref:'A'+(firstHdrRow+1)+':'+XLSX.utils.encode_col(NC-1)+row};
+    }
     XLSX.utils.book_append_sheet(wb2,ws,(sh.name+(_sheetSuffix||'')).slice(0,31));
   });
 
