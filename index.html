@@ -826,15 +826,20 @@ tbody td{padding:7px 10px;vertical-align:middle;}
       <button class="prio-filt-btn" data-mach="4Col" onclick="setPrioFilter(this,'4Col')">🔵 4Col</button>
       <button class="prio-filt-btn" data-mach="6Col" onclick="setPrioFilter(this,'6Col')">🟣 6Col</button>
       <button class="prio-filt-btn" data-mach="2Col" onclick="setPrioFilter(this,'2Col')">🟢 2Col</button>
-      <div style="flex:1;"></div>
-      <input id="prioSearch" placeholder="Search job name / JCNO..." oninput="renderPrioList()"
-        style="background:#0f2035;border:1px solid #2a3f55;color:#e2e8f0;padding:4px 10px;border-radius:5px;font-size:11px;width:200px;">
+    </div>
+    <!-- Search + Customer filter row -->
+    <div style="display:flex;gap:6px;margin-bottom:8px;flex-shrink:0;flex-wrap:wrap;align-items:center;">
+      <input id="prioSearch" placeholder="Search job name / JCNO... (paste multiple JCNOs comma separated)" oninput="renderPrioList()"
+        style="flex:2;min-width:200px;background:#0f2035;border:1px solid #2a3f55;color:#e2e8f0;padding:5px 10px;border-radius:5px;font-size:11px;">
+      <select id="prioCustFilter" onchange="renderPrioList()"
+        style="flex:1;min-width:140px;background:#0f2035;border:1px solid #2a3f55;color:#e2e8f0;padding:5px 8px;border-radius:5px;font-size:11px;">
+        <option value="">All Customers</option>
+      </select>
     </div>
     <div id="prioJobList" style="overflow-y:auto;flex:1;border:1px solid #1e3048;border-radius:6px;"></div>
     <div style="display:flex;gap:8px;justify-content:space-between;align-items:center;margin-top:12px;flex-shrink:0;">
       <div style="font-size:11px;color:#94A3B8;" id="prioCount">0 jobs selected</div>
       <div style="display:flex;gap:8px;">
-        <button class="btn btn-outline btn-sm" onclick="clearPrioSel()">✕ Clear All</button>
         <button class="btn btn-outline" onclick="closePrioModal()">Cancel</button>
         <button class="btn btn-orange" onclick="applyPriority()">🎯 Apply Priority → Rebuild</button>
       </div>
@@ -1428,10 +1433,13 @@ function parseJobs(rows){
     const backColor=(backColorRaw===''||backColorRaw===undefined)?'':String(backColorRaw).trim();
     const frontColorNum=parseFloat(frontColor);
     const pmUpper=pm.toUpperCase();
-    // ── POINT 1: FrontColor=1 AND plan machine string contains "2COL" anywhere → 2Col ──
-    // e.g. "Heidelberg - 2col 4 No", "CD74 4col + Heidelberg 2col", "Heidelberg - 2col 4 No + Coating..."
+    // ── POINT 1: (FrontColor=1 OR BackColor=1) AND plan machine has "2col" anywhere → 2Col ──
     const has2ColInPlan = /2\s*COL/i.test(pm);
-    const redirectTo2Col = (!isNaN(frontColorNum) && frontColorNum===1 && has2ColInPlan);
+    const backColorNum1 = parseFloat(backColor);
+    const redirectTo2Col = has2ColInPlan && (
+      (!isNaN(frontColorNum) && frontColorNum===1) ||
+      (!isNaN(backColorNum1) && backColorNum1===1)
+    );
     const mach = redirectTo2Col ? '2Col' : detectMachine(pm);
     if(!mach) return;
     const jcno=String(gv(r,'JC NO','JCNO')||'').trim();
@@ -3041,6 +3049,10 @@ let _prioMachFilt='ALL';
 
 function openPriorityModal(){
   if(!sched.length){toast('⚠️ Generate schedule first!');return;}
+  // Populate customer dropdown
+  const custSel=document.getElementById('prioCustFilter');
+  const custs=[...new Set(sched.map(j=>j.cust).filter(Boolean))].sort();
+  custSel.innerHTML='<option value="">All Customers</option>'+custs.map(c=>`<option value="${c}">${c}</option>`).join('');
   renderPrioList();
   document.getElementById('prioModal').classList.add('on');
 }
@@ -3054,11 +3066,28 @@ function setPrioFilter(btn,mach){
 }
 
 function renderPrioList(){
-  const search=(document.getElementById('prioSearch')||{value:''}).value.toLowerCase();
+  const rawSearch=(document.getElementById('prioSearch')||{value:''}).value;
+  const custFilter=(document.getElementById('prioCustFilter')||{value:''}).value.toLowerCase();
   const todKey=dk(new Date());
+
+  // Bulk JCNo detection: comma/newline/semicolon/space separated
+  const isBulk = /[,;\n]/.test(rawSearch) || /\s{1,}/.test(rawSearch.trim()) && rawSearch.trim().split(/\s+/).length > 1;
+  let bulkJCNos=new Set();
+  if(isBulk){
+    rawSearch.split(/[,;\n\s]+/).forEach(s=>{const t=s.trim().toUpperCase();if(t)bulkJCNos.add(t);});
+  }
+  const searchLower=rawSearch.toLowerCase().trim();
+
   const jobs=sched.filter(j=>{
     if(_prioMachFilt!=='ALL'&&j.mach!==_prioMachFilt) return false;
-    if(search&&!j.name.toLowerCase().includes(search)&&!j.jcno.toLowerCase().includes(search)) return false;
+    if(custFilter && !(j.cust||'').toLowerCase().includes(custFilter)) return false;
+    if(rawSearch){
+      if(isBulk){
+        if(!bulkJCNos.has(j.jcno.toUpperCase())) return false;
+      } else {
+        if(!j.name.toLowerCase().includes(searchLower)&&!j.jcno.toLowerCase().includes(searchLower)) return false;
+      }
+    }
     return true;
   });
 
