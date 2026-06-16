@@ -573,6 +573,23 @@ tbody td{padding:7px 10px;vertical-align:middle;}
     </div>
   </div>
 
+<!-- ═══ MOVE MACHINE MODAL ═══ -->
+<div class="modal-ov" id="moveModal">
+  <div class="modal" style="width:480px;background:#0d1b2a;border:1.5px solid #3B82F6;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <div>
+        <h3 style="margin:0;color:#93c5fd;">↔ Move Job to Other Machine</h3>
+        <div style="font-size:11px;color:#64748B;margin-top:3px;" id="moveModalSub">—</div>
+      </div>
+      <button onclick="closeMoveModal()" style="background:none;border:none;color:#64748b;font-size:20px;cursor:pointer;">✕</button>
+    </div>
+    <div id="moveJobList" style="display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow-y:auto;"></div>
+    <div style="margin-top:14px;display:flex;justify-content:flex-end;">
+      <button class="btn btn-outline" onclick="closeMoveModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═══ MANUAL ORDER MODAL ═══ -->
 <div class="modal-ov" id="moModal">
   <div class="modal" style="width:720px;max-height:88vh;display:flex;flex-direction:column;background:#0d1b2a;border:1.5px solid var(--accent);">
@@ -1519,6 +1536,15 @@ function parseJobs(rows){
     if(!isNaN(backColorNum) && backColorNum > 2 && isJobNotStarted && !isFrontBal){
       clean.push({...job, _doubleCopy:true});
     }
+    // ── AUTO DOUBLE PASS: FrontColor > machine capacity ────────────────
+    // 6Col capacity = 6: FrontColor > 6 → 2 passes on 6Col, both mrNew
+    // 4Col capacity = 4: FrontColor > 4 → 2 passes on 4Col, both mrNew
+    // (applies regardless of status — machine physically can't do it in one pass)
+    const fColorNum = parseFloat(frontColor);
+    const machCap = mach==='6Col' ? 6 : mach==='4Col' ? 4 : 99;
+    if(!isNaN(fColorNum) && fColorNum > machCap && machCap !== 99){
+      clean.push({...job, _doubleCopy:true, _capacityPass:true});
+    }
   });
   showPg2();
 }
@@ -1706,9 +1732,10 @@ function buildSchedule(){
     // 1. Code must be non-empty — blank codes never match
     // 2. Must be TRULY CONSECUTIVE — the current job starts on the same plan day
     //    that the previous job ends on. Cross-day gap = plates reset = full MR.
+    // 3. _doubleCopy jobs (back-side pass) always get mrNew — different plate setup
     const curStartKey = wmToInfo(startWM).dayKey;
     const isTrulyCons = last && last._eKey && (last._eKey === curStartKey);
-    const isSameCode = isTrulyCons &&
+    const isSameCode = !j._doubleCopy && isTrulyCons &&
                        last.code && j.code &&
                        last.code.trim() !== '' && j.code.trim() !== '' &&
                        last.code.trim() === j.code.trim();
@@ -2180,10 +2207,19 @@ function renderJobCard(j){
     ? `<span style="font-size:8px;color:#991B1B;background:#FEF2F2;border:1px solid #FECACA;padding:1px 5px;border-radius:8px;margin-left:3px;">📦 RM Wait</span>`
     : '';
 
+  // Move button — only for 4Col ↔ 6Col (rare breakdown case), not for double/capacity pass copies
+  const canMove = (j.mach==='4Col'||j.mach==='6Col') && !j._doubleCopy && !j._capacityPass;
+  const moveBtn = canMove
+    ? `<button onclick="openMoveModal('${j.jcno}')" style="font-size:9px;padding:2px 8px;border-radius:4px;border:1px solid #3B82F6;background:#1e3a5f;color:#93c5fd;cursor:pointer;font-weight:600;" title="Move to other machine">↔ Move</button>`
+    : '';
+
   return `<div class="jcard ${cls}">
     <div class="j-top">
       <div class="j-name">${j.name}${revBadge}${rmBadge}</div>
-      ${stag?`<span class="j-status-tag ${stagcls}">${stag}</span>`:''}
+      <div style="display:flex;align-items:center;gap:4px;">
+        ${stag?`<span class="j-status-tag ${stagcls}">${stag}</span>`:''}
+        ${moveBtn}
+      </div>
     </div>
     <div class="j-meta">
       <span>📋 <b>${j.jcno}</b></span>
@@ -3046,6 +3082,73 @@ function print7DayPlan(){
 // ══════════════════════════════════════════════
 let _prioSel=new Set();   // jcnos selected as priority
 let _prioMachFilt='ALL';
+
+// ══════════════════════════════════════════════
+// MOVE MACHINE (4Col ↔ 6Col)
+// ══════════════════════════════════════════════
+let _moveJcno=null;
+
+function openMoveModal(jcno){
+  const j=sched.find(x=>x.jcno===jcno && !x._doubleCopy && !x._capacityPass);
+  if(!j){toast('⚠️ Job not found');return;}
+  _moveJcno=jcno;
+  const targetMach=j.mach==='4Col'?'6Col':'4Col';
+  const targetLabel=MACHINES[targetMach].label;
+  const fColorNum=parseFloat(j.frontColor)||0;
+  const machCap=targetMach==='6Col'?6:4;
+  const needsDouble=fColorNum>machCap;
+
+  document.getElementById('moveModalSub').textContent=
+    `${j.jcno} · ${j.name} · Currently: ${MACHINES[j.mach].label}`;
+
+  const html=`
+    <div style="background:#0f2035;border:1px solid #2a3f55;border-radius:8px;padding:14px;">
+      <div style="font-size:13px;font-weight:700;color:#e2e8f0;margin-bottom:6px;">
+        Move to → <span style="color:#3B82F6;">${targetLabel}</span>
+      </div>
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:10px;">
+        FrontColor: <b style="color:#fbbf24;">${j.frontColor||'—'}</b> &nbsp;|&nbsp;
+        Machine capacity: <b style="color:#fbbf24;">${machCap} colours</b>
+        ${needsDouble?`<br><span style="color:#f87171;font-weight:700;">⚠️ FrontColor (${fColorNum}) > ${machCap} → will run as 2 passes on ${targetLabel}, both MR applied</span>`:''}
+      </div>
+      <button class="btn btn-orange" onclick="confirmMove('${jcno}','${targetMach}')">
+        ✅ Confirm Move to ${targetLabel}
+      </button>
+    </div>`;
+  document.getElementById('moveJobList').innerHTML=html;
+  document.getElementById('moveModal').classList.add('on');
+}
+
+function closeMoveModal(){
+  document.getElementById('moveModal').classList.remove('on');
+  _moveJcno=null;
+}
+
+function confirmMove(jcno, targetMach){
+  // Update in clean array — change mach, remove old capacity double if any
+  // Remove any existing _capacityPass copy for this jcno
+  const idx=clean.findIndex(x=>x.jcno===jcno && !x._doubleCopy && !x._capacityPass);
+  if(idx===-1){toast('⚠️ Job not found');return;}
+
+  // Remove old capacity pass copies
+  const toRemove=clean.filter(x=>x.jcno===jcno&&x._capacityPass);
+  toRemove.forEach(x=>{const i=clean.indexOf(x);if(i>-1)clean.splice(i,1);});
+
+  // Update machine
+  clean[idx]={...clean[idx], mach:targetMach};
+
+  // Re-check capacity double pass for new machine
+  const j=clean[idx];
+  const fColorNum=parseFloat(j.frontColor)||0;
+  const machCap=targetMach==='6Col'?6:4;
+  if(fColorNum>machCap){
+    clean.push({...j, _doubleCopy:true, _capacityPass:true});
+  }
+
+  closeMoveModal();
+  buildSchedule();
+  toast(`✅ ${jcno} moved to ${MACHINES[targetMach].label}${fColorNum>machCap?' (2 passes)':''}`);
+}
 
 function openPriorityModal(){
   if(!sched.length){toast('⚠️ Generate schedule first!');return;}
