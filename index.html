@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AIA Printing Schedule v10</title>
+<title>AIA Printing Schedule v16</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 <script>if(typeof XLSXStyle!=='undefined')window.XLSX=XLSXStyle;</script>
 <style>
@@ -498,12 +498,8 @@ tbody td{padding:7px 10px;vertical-align:middle;}
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
       <button class="btn btn-orange" onclick="buildSchedule()">🔄 Regenerate</button>
-      <button class="btn btn-outline btn-sm" onclick="openUrgentModal()">⚡ Add Urgent Job</button>
       <button class="btn btn-outline btn-sm" onclick="openPriorityModal()" style="border-color:#F97316;color:#F97316;">🎯 Priority Select</button>
       <button class="btn btn-outline btn-sm" onclick="exportExcel()">📥 Export Excel</button>
-      <button class="btn btn-outline btn-sm" onclick="window.print()">🖨️ Print</button>
-      <button class="btn btn-green btn-sm" onclick="print7DayPlan()">📅 7 Days Plan</button>
-      <button class="btn btn-outline btn-sm" onclick="export7DayExcel()" style="border-color:#16A34A;color:#16A34A;">📥 7 Days Excel</button>
       <button class="btn btn-outline btn-sm" onclick="goPg(1)">← Re-upload</button>
     </div>
   </div>
@@ -1426,7 +1422,17 @@ function parseJobs(rows){
       :rawStatus; // keep original if no match
     if(!VALID_STATUS.has(status)) return;
     const pm=String(gv(r,'Plan\nMachine','Plan Machine','PlanMachine')||'').trim();
-    const mach=detectMachine(pm);
+    const frontColorRaw=gv(r,'FrontColor','Front Color','FrontColour','Front Colour');
+    const backColorRaw=gv(r,'BackColor','Back Color','BackColour','Back Colour');
+    const frontColor=(frontColorRaw===''||frontColorRaw===undefined)?'':String(frontColorRaw).trim();
+    const backColor=(backColorRaw===''||backColorRaw===undefined)?'':String(backColorRaw).trim();
+    const frontColorNum=parseFloat(frontColor);
+    const pmUpper=pm.toUpperCase();
+    // ── POINT 1: FrontColor=1 AND plan machine string contains "2COL" anywhere → 2Col ──
+    // e.g. "Heidelberg - 2col 4 No", "CD74 4col + Heidelberg 2col", "Heidelberg - 2col 4 No + Coating..."
+    const has2ColInPlan = /2\s*COL/i.test(pm);
+    const redirectTo2Col = (!isNaN(frontColorNum) && frontColorNum===1 && has2ColInPlan);
+    const mach = redirectTo2Col ? '2Col' : detectMachine(pm);
     if(!mach) return;
     const jcno=String(gv(r,'JC NO','JCNO')||'').trim();
     if(!jcno||seen.has(jcno.toUpperCase())) return;
@@ -1447,13 +1453,7 @@ function parseJobs(rows){
     // RM Status / Board Status — "Avl." / "Available" = material available → schedule first
     const rmRaw=String(gv(r,'BoardStatus','Board\nStatus ','Board Status','rm status UPDATE 1.7.2024')||'').trim().toLowerCase();
     const rmAvailable = rmRaw.includes('avl') || rmRaw.includes('available') || rmRaw.includes('yes');
-    // FrontColor / BackColor (Track Record cols BO/BP) — read for export + double-job detection
-    // NOTE: use explicit empty/undefined check, not `||''`, because gv() can return
-    // the number 0 (valid BackColor=0 value) which `0||''` would wrongly blank out.
-    const frontColorRaw=gv(r,'FrontColor','Front Color','FrontColour','Front Colour');
-    const backColorRaw=gv(r,'BackColor','Back Color','BackColour','Back Colour');
-    const frontColor=(frontColorRaw===''||frontColorRaw===undefined)?'':String(frontColorRaw).trim();
-    const backColor=(backColorRaw===''||backColorRaw===undefined)?'':String(backColorRaw).trim();
+    // frontColor / backColor already declared above (for machine redirect logic)
     const job={
       jcno, code:String(gv(r,'code','Code')||'').trim(),
       name:String(gv(r,'JobName','Job Name')||'').trim(),
@@ -1500,12 +1500,15 @@ function parseJobs(rows){
     };
     clean.push(job);
     // ── DOUBLE JOB (additive) ──────────────────────────────────────────
-    // BackColor (Track Record col BP) >= 2 → job runs through machine TWICE
-    // (back-side print pass). Add a duplicate copy with the SAME jcno so it
-    // is scheduled a second time and shows up again as the same Doc ID in
-    // the schedule + export. Existing single-pass jobs are unaffected.
+    // BackColor (Track Record col BP) > 2 → job runs through machine TWICE
+    // RULES:
+    //  - Only applies when Job_Status = "Job Not Started"
+    //  - If status = "FRONT BAL" → always single (back side already done or not needed)
+    //  - backColor must be > 2 (strictly greater, not >=2)
     const backColorNum=parseFloat(backColor);
-    if(!isNaN(backColorNum) && backColorNum>=2){
+    const isJobNotStarted = (status === 'Job Not Started');
+    const isFrontBal = (status === 'FRONT BAL');
+    if(!isNaN(backColorNum) && backColorNum > 2 && isJobNotStarted && !isFrontBal){
       clean.push({...job, _doubleCopy:true});
     }
   });
@@ -1560,7 +1563,18 @@ function buildSchedule(){
 
   // Sort per machine: if manualOrder set → use that, else auto-sort
   const todayKey=dk(new Date());
+  // 1-month window: today + 30 days
+  const oneMonthLater=(()=>{const d=new Date();d.setDate(d.getDate()+30);return dk(d);})();
+
   function isOverdue(j){ return j.revDate && j.revDate<todayKey; }
+  // Within-window: revDate exists AND falls in [today, today+30 days]
+  function isWithinMonth(j){ return j.revDate && j.revDate>=todayKey && j.revDate<=oneMonthLater; }
+  // revDate bucket: 0=overdue, 1=within 1 month, 2=beyond or no revDate
+  function revBucket(j){
+    if(isOverdue(j)) return 0;
+    if(isWithinMonth(j)) return 1;
+    return 2;
+  }
 
   function colourKey(j){
     // Unique key for the colour combination — same key = no MR change needed
@@ -1574,24 +1588,26 @@ function buildSchedule(){
       // 2. RM available first (paper in hand → schedule now; not available → later)
       if(PRIORITY_TOP_N === 0){ // only apply RM priority when no top-N limit
         const ara = a.rmAvailable===true, arb = b.rmAvailable===true;
-        const ana = a.rmAvailable===false, anb = b.rmAvailable===false;
         // available before not-available; unknown (undefined) = treat as available
         if(ara !== arb){
           if(ara) return -1;
           if(arb) return 1;
         }
       }
-      // 3. Colour sequence score (U1→U2→U3→U4)
+      // 3. RevDate bucket: overdue (0) → within 1 month (1) → rest (2)
+      const ra=revBucket(a), rb=revBucket(b);
+      if(ra!==rb) return ra-rb;
+      // 4. Within same bucket → colour sequence score
       const cs=colourScore(a)-colourScore(b);
       if(cs!==0) return cs;
-      // 4. Same colour score → club identical colour combos (no MR change)
+      // 5. Same colour score → club identical colour combos (no MR change)
       const ck_a=colourKey(a), ck_b=colourKey(b);
       if(ck_a!==ck_b) return ck_a<ck_b?-1:1;
-      // 5. Same colour combo → overdue revDate first
-      const ao=isOverdue(a), bo=isOverdue(b);
-      if(ao!==bo) return ao?-1:1;
-      if(ao&&bo&&a.revDate!==b.revDate) return a.revDate<b.revDate?-1:1;
-      // 6. Then by dim
+      // 6. Same colour combo → earlier revDate first (within bucket)
+      if(a.revDate && b.revDate && a.revDate!==b.revDate) return a.revDate<b.revDate?-1:1;
+      if(a.revDate && !b.revDate) return -1;
+      if(!a.revDate && b.revDate) return 1;
+      // 7. Then by dim
       return (a.dim||'').localeCompare(b.dim||'');
     });
   }
