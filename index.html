@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AIA Printing Schedule v16</title>
+<title>AIA Printing Schedule v17</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 <script>if(typeof XLSXStyle!=='undefined')window.XLSX=XLSXStyle;</script>
 <style>
@@ -516,6 +516,7 @@ tbody td{padding:7px 10px;vertical-align:middle;}
       <button class="bd-mach" id="mo6cBtn" onclick="openMO('6Col')">🟣 6Col Order</button>
       <button class="bd-mach" id="mo2cBtn" onclick="openMO('2Col')">🟢 2Col Order</button>
       <button class="btn btn-outline btn-sm" onclick="resetAllMO()" style="margin-left:8px;">↺ Reset All Orders</button>
+      <button class="btn btn-orange btn-sm" onclick="openMoveJobPanel()" style="margin-left:8px;border-color:#3B82F6;background:#1e3a5f;">↔ Move 4Col⇄6Col (Breakdown)</button>
     </div>
     <!-- Row 0: Sunday + Machine Settings -->
     <div class="bd-row" style="margin-bottom:10px;">
@@ -531,6 +532,9 @@ tbody td{padding:7px 10px;vertical-align:middle;}
       </button>
       <button onclick="setTab('uv')" style="display:inline-flex;align-items:center;gap:7px;padding:6px 14px;border-radius:20px;border:2px solid #7c3aed;background:#1a0a2a;color:#c4b5fd;font-size:11px;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif;transition:all .2s;">
         ⚡ UV Schedule
+      </button>
+      <button onclick="setTab('weekplan')" style="display:inline-flex;align-items:center;gap:7px;padding:6px 14px;border-radius:20px;border:2px solid #3B82F6;background:#0a1a2a;color:#93c5fd;font-size:11px;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif;transition:all .2s;">
+        📆 Week Planning
       </button>
     </div>
     <!-- Row 2: Breakdown -->
@@ -572,6 +576,37 @@ tbody td{padding:7px 10px;vertical-align:middle;}
       </div>
     </div>
   </div>
+
+<!-- ═══ MOVE JOB PANEL (Multi JCNo Search — Breakdown 4Col⇄6Col) ═══ -->
+<div class="modal-ov" id="moveJobPanelModal">
+  <div class="modal" style="width:600px;max-height:88vh;display:flex;flex-direction:column;background:#0d1b2a;border:1.5px solid #3B82F6;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-shrink:0;">
+      <div>
+        <h3 style="margin:0;color:#93c5fd;">↔ Move Jobs — 4Col ⇄ 6Col (Breakdown)</h3>
+        <div style="font-size:11px;color:#64748B;margin-top:3px;">When a machine breaks down, move jobs to the other machine</div>
+      </div>
+      <button onclick="closeMoveJobPanel()" style="background:none;border:none;color:#64748b;font-size:20px;cursor:pointer;">✕</button>
+    </div>
+    <div style="background:#0f2035;border:1px solid #1e3a5f;border-radius:6px;padding:8px 12px;font-size:11px;color:#93c5fd;margin-bottom:12px;flex-shrink:0;">
+      💡 Paste or type one or more JCNo (space, comma, or newline separated) — e.g. <span style="font-family:'JetBrains Mono',monospace;">26JA/0144 26JA/0198 26JA/0276</span>. Each job's current machine, FrontColor and BackColor will be shown. If FrontColor exceeds the target machine's capacity, it will automatically run as 2 passes (double).
+    </div>
+    <textarea id="moveJobSearchInput" placeholder="Type or paste JCNo(s) here..." autocomplete="off" rows="2"
+      style="width:100%;padding:9px 12px;border-radius:6px;border:1.5px solid #2a3f55;background:#0a1420;color:#e2e8f0;font-size:13px;font-family:'JetBrains Mono',monospace;outline:none;resize:vertical;margin-bottom:10px;flex-shrink:0;"
+      oninput="moveJobSearch(this.value)"></textarea>
+    <div id="moveJobBatchBar" style="display:none;align-items:center;justify-content:space-between;gap:8px;background:#0f2035;border:1px solid #1e3a5f;border-radius:6px;padding:8px 12px;margin-bottom:10px;flex-shrink:0;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span id="moveJobSelCount" style="font-size:11px;font-weight:700;color:#93c5fd;">0 selected</span>
+        <button onclick="moveJobSelectAll()" style="background:none;border:1px solid #2a3f55;color:#94a3b8;font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer;">Select All</button>
+        <button onclick="moveJobSelectNone()" style="background:none;border:1px solid #2a3f55;color:#94a3b8;font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer;">Select None</button>
+      </div>
+      <div style="display:flex;gap:6px;">
+        <button onclick="confirmMoveBatch('4Col')" style="background:#1e3a5f;border:1px solid #3B82F6;color:#93c5fd;font-size:11px;font-weight:700;padding:6px 12px;border-radius:6px;cursor:pointer;white-space:nowrap;">Move Selected → 4Col</button>
+        <button onclick="confirmMoveBatch('6Col')" style="background:#2a1a3f;border:1px solid #7c3aed;color:#c4b5fd;font-size:11px;font-weight:700;padding:6px 12px;border-radius:6px;cursor:pointer;white-space:nowrap;">Move Selected → 6Col</button>
+      </div>
+    </div>
+    <div id="moveJobPanelResult" style="min-height:60px;overflow-y:auto;flex:1;"></div>
+  </div>
+</div>
 
 <!-- ═══ MOVE MACHINE MODAL ═══ -->
 <div class="modal-ov" id="moveModal">
@@ -702,6 +737,16 @@ tbody td{padding:7px 10px;vertical-align:middle;}
     <div style="font-size:12px;color:#94A3B8;margin-bottom:10px;">📌 दर वेळी schedule build केल्यावर snapshot save होतो (मागील 7 दिवसांचा record). प्रत्येक snapshot मध्ये काय बदल झाला ते आणि त्याच format मध्ये Excel download करता येईल.</div>
     <div style="margin-bottom:12px;"><button onclick="exportAllHistory()" style="background:#7c3aed;border:none;color:#fff;font-size:12px;font-weight:700;padding:7px 14px;border-radius:6px;cursor:pointer;">📦 Download All 7 Days (One Excel — sheet per day)</button></div>
     <div id="historyList"></div>
+  </div>
+  <div id="vWeekPlan" class="hidden">
+    <div style="font-size:12px;color:#94A3B8;margin-bottom:10px;">📌 Monday to Sunday — each day's <b>frozen planning</b> (the schedule exactly as it was saved on that day — changes made later won't affect this view). Data is stored on this browser/device for the last 7 days.</div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+      <label style="font-size:12px;font-weight:700;color:#93c5fd;">Week Start (Monday):</label>
+      <input type="date" id="weekPlanStart" style="padding:6px 10px;border:1.5px solid #2a3f55;border-radius:5px;font-size:12px;background:#0d1b2a;color:#e2e8f0;font-family:'JetBrains Mono',monospace;outline:none;" onchange="renderWeekPlan()">
+      <button onclick="renderWeekPlan()" style="padding:7px 16px;border-radius:6px;background:#3B82F6;color:#fff;border:none;font-size:12px;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif;">📆 Load Week</button>
+      <button onclick="exportFullWeekExcel()" style="padding:7px 16px;border-radius:6px;background:#7c3aed;color:#fff;border:none;font-size:12px;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif;">📦 Download Full Week (Mon–Sun, one Excel)</button>
+    </div>
+    <div id="weekPlanGrid"></div>
   </div>
   <div id="v2c"  class="hidden"><div id="day2c"></div></div>
   <div id="vTbl" class="hidden">
@@ -2126,6 +2171,106 @@ function renderHistory(){
     </div>`;
   }).join('');
 }
+
+// ══════════════════════════════════════════════
+// WEEK PLANNING (📆 Monday–Sunday frozen view, built on History snapshots)
+// ══════════════════════════════════════════════
+function renderWeekPlan(){
+  const el=document.getElementById('weekPlanGrid');
+  if(!el) return;
+  const startInput=document.getElementById('weekPlanStart');
+  let startVal=startInput?.value;
+  if(!startVal){
+    const d=new Date(); d.setDate(d.getDate()-d.getDay()+1);
+    startVal=dk(d);
+    if(startInput) startInput.value=startVal;
+  }
+  const hist=getHistory();
+  const histMap=new Map(hist.map(h=>[(h.dayKey||dk(new Date(h.ts))), h]));
+
+  const dayNames=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+  const startD=new Date(startVal+'T12:00:00');
+  const todayKeyWP=dk(new Date());
+
+  let html=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;">`;
+  for(let i=0;i<7;i++){
+    const dObj=new Date(startD); dObj.setDate(startD.getDate()+i);
+    const dKey=dk(dObj);
+    const dLabel=dObj.toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'});
+    const snap=histMap.get(dKey);
+    const isToday=dKey===todayKeyWP;
+
+    let bodyHtml;
+    if(snap){
+      const c4=snap.sched.filter(j=>j.mach==='4Col').length;
+      const c6=snap.sched.filter(j=>j.mach==='6Col').length;
+      const c2=snap.sched.filter(j=>j.mach==='2Col').length;
+      const urg=snap.sched.filter(j=>j.urgent).length;
+      bodyHtml=`
+        <div style="font-size:10px;color:#94A3B8;margin-bottom:8px;">Saved: ${snap.label}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;">
+          <span class="chip" style="background:#1e3a5f;color:#93c5fd;">🔵 4Col: ${c4}</span>
+          <span class="chip" style="background:#2a1a3f;color:#c4b5fd;">🟣 6Col: ${c6}</span>
+          <span class="chip" style="background:#14301f;color:#86efac;">🟢 2Col: ${c2}</span>
+          ${urg?`<span class="chip" style="background:#3f1414;color:#f87171;">⚡ Urgent: ${urg}</span>`:''}
+          <span class="chip" style="background:#2a2a2a;color:#cbd5e1;">Total: ${snap.sched.length} jobs</span>
+        </div>
+        <button onclick="exportWeekPlanDay('${dKey}')" style="width:100%;background:#F97316;border:none;color:#fff;font-size:11px;font-weight:700;padding:6px 12px;border-radius:6px;cursor:pointer;">📥 Download Excel (this day)</button>`;
+    } else {
+      bodyHtml=`<div style="font-size:11px;color:#64748B;text-align:center;padding:14px 0;">या दिवसाचा snapshot उपलब्ध नाही<br><span style="font-size:9px;">(फक्त मागील 7 दिवसांचा record save होतो)</span></div>`;
+    }
+
+    html+=`<div class="card" style="margin-bottom:0;${isToday?'border:1.5px solid #3B82F6;':''}">
+      <div class="card-hd">
+        <h2>${dayNames[i]} ${isToday?'<span style=\"color:#3B82F6;\">(आज)</span>':''}</h2>
+        <span class="chip">${dLabel}</span>
+      </div>
+      <div class="card-bd">${bodyHtml}</div>
+    </div>`;
+  }
+  html+=`</div>`;
+  el.innerHTML=html;
+}
+
+function exportWeekPlanDay(dayKey){
+  const hist=getHistory();
+  const snap=hist.find(h=>(h.dayKey||dk(new Date(h.ts)))===dayKey);
+  if(!snap){toast('⚠️ Snapshot not found');return;}
+  const backup=sched;
+  sched=snap.sched;
+  try{ exportExcel(); } finally { sched=backup; }
+}
+
+function exportFullWeekExcel(){
+  const startInput=document.getElementById('weekPlanStart');
+  const startVal=startInput?.value;
+  if(!startVal){toast('⚠️ Select a week first');return;}
+  const hist=getHistory();
+  if(!hist.length){toast('⚠️ No planning history available');return;}
+  const histMap=new Map(hist.map(h=>[(h.dayKey||dk(new Date(h.ts))),h]));
+  const startD=new Date(startVal+'T12:00:00');
+  const combined=[];
+  let daysFound=0;
+  for(let i=0;i<7;i++){
+    const dObj=new Date(startD); dObj.setDate(startD.getDate()+i);
+    const dKey=dk(dObj);
+    const snap=histMap.get(dKey);
+    if(snap){ combined.push(...snap.sched); daysFound++; }
+  }
+  if(!combined.length){toast('⚠️ No snapshots found for this week');return;}
+  combined.forEach((j,i)=>j.sr=i+1);
+  const endD=new Date(startD); endD.setDate(startD.getDate()+6);
+  const fname=`AIA_WeekPlan_${startVal}_to_${dk(endD)}.xlsx`;
+  const backup=sched;
+  sched=combined;
+  try{
+    exportExcel(null,'',fname);
+  } finally {
+    sched=backup;
+  }
+  toast(`📦 Downloaded: ${daysFound} day(s) combined`);
+}
+
 function exportAllHistory(){
   const hist=getHistory();
   if(!hist.length){toast('⚠️ No history available');return;}
@@ -2213,9 +2358,16 @@ function renderJobCard(j){
     ? `<button onclick="openMoveModal('${j.jcno}')" style="font-size:9px;padding:2px 8px;border-radius:4px;border:1px solid #3B82F6;background:#1e3a5f;color:#93c5fd;cursor:pointer;font-weight:600;" title="Move to other machine">↔ Move</button>`
     : '';
 
+  // Job name highlight — Urgent (red, priority) > UV Day (purple)
+  const nameStyle = j.urgent
+    ? 'font-weight:800;color:#DC2626;'
+    : j.isUV
+    ? 'font-weight:800;color:#7c3aed;'
+    : '';
+
   return `<div class="jcard ${cls}">
     <div class="j-top">
-      <div class="j-name">${j.name}${revBadge}${rmBadge}</div>
+      <div class="j-name" style="${nameStyle}">${j.name}${revBadge}${rmBadge}</div>
       <div style="display:flex;align-items:center;gap:4px;">
         ${stag?`<span class="j-status-tag ${stagcls}">${stag}</span>`:''}
         ${moveBtn}
@@ -2284,7 +2436,7 @@ function renderTable(){
 // TABS
 // ══════════════════════════════════════════════
 function setTab(t){
-  const map={all:'vAll','4col':'v4c','6col':'v6c',uv:'vUV',history:'vHistory','2col':'v2c',tbl:'vTbl',miss:'vMiss',weekly:'vWeekly',monthly:'vMonthly',delayed:'vDelayed'};
+  const map={all:'vAll','4col':'v4c','6col':'v6c',uv:'vUV',history:'vHistory',weekplan:'vWeekPlan','2col':'v2c',tbl:'vTbl',miss:'vMiss',weekly:'vWeekly',monthly:'vMonthly',delayed:'vDelayed'};
   Object.values(map).forEach(v=>document.getElementById(v)?.classList.add('hidden'));
   document.getElementById(map[t])?.classList.remove('hidden');
   const tabKeys=['all','4col','6col','2col','tbl','miss','weekly','monthly','delayed'];
@@ -2293,6 +2445,14 @@ function setTab(t){
   });
   if(t==='history'){
     renderHistory();
+  }
+  if(t==='weekplan'){
+    const el=document.getElementById('weekPlanStart');
+    if(el&&!el.value){
+      const d=new Date(); d.setDate(d.getDate()-d.getDay()+1); // Monday of current week
+      el.value=dk(d);
+    }
+    renderWeekPlan();
   }
   if(t==='uv'){
     renderUVCalendar();
@@ -3150,6 +3310,168 @@ function confirmMove(jcno, targetMach){
   toast(`✅ ${jcno} moved to ${MACHINES[targetMach].label}${fColorNum>machCap?' (2 passes)':''}`);
 }
 
+// ══════════════════════════════════════════════
+// MOVE JOB PANEL — Multi JCNo Search (Manual Order row, Breakdown 4Col⇄6Col)
+// Reuses confirmMove() logic above — no existing function touched.
+// ══════════════════════════════════════════════
+let _moveJobMatches=[];   // current matched job objects
+let _moveJobSel=new Set(); // selected jcnos
+
+function openMoveJobPanel(){
+  if(!sched.length){toast('⚠️ Generate schedule first!');return;}
+  document.getElementById('moveJobSearchInput').value='';
+  _moveJobMatches=[];
+  _moveJobSel=new Set();
+  document.getElementById('moveJobBatchBar').style.display='none';
+  document.getElementById('moveJobPanelResult').innerHTML=
+    `<div style="font-size:11px;color:#64748b;text-align:center;padding:14px 0;">Type or paste JCNo(s) above ⬆️</div>`;
+  document.getElementById('moveJobPanelModal').classList.add('on');
+  setTimeout(()=>document.getElementById('moveJobSearchInput')?.focus(),50);
+}
+
+function closeMoveJobPanel(){
+  document.getElementById('moveJobPanelModal').classList.remove('on');
+}
+
+function moveJobSearch(qRaw){
+  const resEl=document.getElementById('moveJobPanelResult');
+  const batchBar=document.getElementById('moveJobBatchBar');
+  // Split on whitespace, commas, or newlines — supports multiple JCNo at once
+  const terms=(qRaw||'').split(/[\s,]+/).map(s=>s.trim().toLowerCase()).filter(Boolean);
+
+  if(!terms.length){
+    _moveJobMatches=[];
+    _moveJobSel=new Set();
+    batchBar.style.display='none';
+    resEl.innerHTML=`<div style="font-size:11px;color:#64748b;text-align:center;padding:14px 0;">Type or paste JCNo(s) above ⬆️</div>`;
+    return;
+  }
+
+  // Match jobs whose jcno contains ANY of the typed terms (dedup by jcno)
+  const seen=new Set();
+  const matches=[];
+  sched.filter(j=>!j._doubleCopy && !j._capacityPass && (j.mach==='4Col'||j.mach==='6Col')).forEach(j=>{
+    const jl=j.jcno.toLowerCase();
+    if(terms.some(t=>jl.includes(t)) && !seen.has(j.jcno)){
+      seen.add(j.jcno);
+      matches.push(j);
+    }
+  });
+  _moveJobMatches=matches;
+  // Keep only still-valid selections
+  _moveJobSel=new Set([..._moveJobSel].filter(jc=>matches.some(j=>j.jcno===jc)));
+
+  if(!matches.length){
+    batchBar.style.display='none';
+    resEl.innerHTML=`<div style="font-size:11px;color:#f87171;text-align:center;padding:14px 0;">⚠️ No 4Col/6Col job found for the given JCNo(s)</div>`;
+    return;
+  }
+
+  batchBar.style.display='flex';
+  renderMoveJobMatches();
+}
+
+function renderMoveJobMatches(){
+  const resEl=document.getElementById('moveJobPanelResult');
+  resEl.innerHTML=_moveJobMatches.map(j=>{
+    const targetMach=j.mach==='4Col'?'6Col':'4Col';
+    const targetLabel=MACHINES[targetMach].label;
+    const fColorNum=parseFloat(j.frontColor)||0;
+    const machCap=targetMach==='6Col'?6:4;
+    const needsDouble=fColorNum>machCap;
+    const checked=_moveJobSel.has(j.jcno);
+    return `<div style="background:#0f2035;border:1px solid ${checked?'#3B82F6':'#2a3f55'};border-radius:8px;padding:12px;margin-bottom:8px;display:flex;gap:10px;align-items:flex-start;">
+      <input type="checkbox" ${checked?'checked':''} onchange="moveJobToggleSel('${j.jcno}',this.checked)" style="margin-top:3px;width:16px;height:16px;cursor:pointer;flex-shrink:0;">
+      <div style="flex:1;">
+        <div style="font-size:12px;font-weight:700;color:#e2e8f0;margin-bottom:4px;">
+          📋 ${j.jcno} <span style="color:#64748b;font-weight:400;">— ${j.name}</span>
+        </div>
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:8px;">
+          Currently: <b style="color:#fbbf24;">${MACHINES[j.mach].label}</b> &nbsp;|&nbsp;
+          FrontColor: <b style="color:#fbbf24;">${j.frontColor||'—'}</b> &nbsp;|&nbsp;
+          BackColor: <b style="color:#fbbf24;">${j.backColor||'—'}</b>
+          ${needsDouble?`<br><span style="color:#f87171;font-weight:700;">⚠️ FrontColor (${fColorNum}) > ${targetLabel} capacity (${machCap}) → will run as 2 passes (double)</span>`:''}
+        </div>
+        <button class="btn btn-orange" style="width:100%;" onclick="confirmMoveFromPanel('${j.jcno}','${targetMach}')">
+          ✅ Move to ${targetLabel}
+        </button>
+      </div>
+    </div>`;
+  }).join('');
+  updateMoveJobSelCount();
+}
+
+function moveJobToggleSel(jcno, isChecked){
+  if(isChecked) _moveJobSel.add(jcno); else _moveJobSel.delete(jcno);
+  updateMoveJobSelCount();
+}
+
+function moveJobSelectAll(){
+  _moveJobSel=new Set(_moveJobMatches.map(j=>j.jcno));
+  renderMoveJobMatches();
+}
+
+function moveJobSelectNone(){
+  _moveJobSel=new Set();
+  renderMoveJobMatches();
+}
+
+function updateMoveJobSelCount(){
+  const el=document.getElementById('moveJobSelCount');
+  if(el) el.textContent=`${_moveJobSel.size} selected`;
+}
+
+function confirmMoveFromPanel(jcno, targetMach){
+  // Reuse exact same logic as confirmMove(), just close the new panel instead of moveModal.
+  const idx=clean.findIndex(x=>x.jcno===jcno && !x._doubleCopy && !x._capacityPass);
+  if(idx===-1){toast('⚠️ Job not found');return;}
+
+  const toRemove=clean.filter(x=>x.jcno===jcno&&x._capacityPass);
+  toRemove.forEach(x=>{const i=clean.indexOf(x);if(i>-1)clean.splice(i,1);});
+
+  clean[idx]={...clean[idx], mach:targetMach};
+
+  const j=clean[idx];
+  const fColorNum=parseFloat(j.frontColor)||0;
+  const machCap=targetMach==='6Col'?6:4;
+  if(fColorNum>machCap){
+    clean.push({...j, _doubleCopy:true, _capacityPass:true});
+  }
+
+  closeMoveJobPanel();
+  buildSchedule();
+  toast(`✅ ${jcno} moved to ${MACHINES[targetMach].label}${fColorNum>machCap?' (2 passes)':''}`);
+}
+
+function confirmMoveBatch(targetMach){
+  if(!_moveJobSel.size){toast('⚠️ Select at least one job first');return;}
+  const targetLabel=MACHINES[targetMach].label;
+  const jcnos=[..._moveJobSel];
+  let doubleCount=0;
+
+  jcnos.forEach(jcno=>{
+    const idx=clean.findIndex(x=>x.jcno===jcno && !x._doubleCopy && !x._capacityPass);
+    if(idx===-1) return;
+
+    const toRemove=clean.filter(x=>x.jcno===jcno&&x._capacityPass);
+    toRemove.forEach(x=>{const i=clean.indexOf(x);if(i>-1)clean.splice(i,1);});
+
+    clean[idx]={...clean[idx], mach:targetMach};
+
+    const j=clean[idx];
+    const fColorNum=parseFloat(j.frontColor)||0;
+    const machCap=targetMach==='6Col'?6:4;
+    if(fColorNum>machCap){
+      clean.push({...j, _doubleCopy:true, _capacityPass:true});
+      doubleCount++;
+    }
+  });
+
+  closeMoveJobPanel();
+  buildSchedule();
+  toast(`✅ ${jcnos.length} job(s) moved to ${targetLabel}${doubleCount?` (${doubleCount} as 2 passes)`:''}`);
+}
+
 function openPriorityModal(){
   if(!sched.length){toast('⚠️ Generate schedule first!');return;}
   // Populate customer dropdown
@@ -3566,6 +3888,7 @@ function exportExcel(_extWb, _sheetSuffix, _filename){
     {k:'u6',    lbl:'Unit6',      w:18},
     {k:'coat',  lbl:'Coat Detail',w:28},
     {k:'lam',   lbl:'Lam Detail', w:20},
+    {k:'rmstat',lbl:'RM Status',  w:14},
     {k:'mr',    lbl:'MR Min',     w:12},
     {k:'mrtime',lbl:'MR Start',   w:12},
     {k:'mrdate',lbl:'MR Date',    w:14},
@@ -3719,6 +4042,7 @@ function exportExcel(_extWb, _sheetSuffix, _filename){
             inkVal(j.inkUnits[5]),
             j.coatDetail,
             j.lamDetail||'',
+            j.rmAvailable===true?'Available':j.rmAvailable===false?'Wait':'—',
             mrNote,
             j.mrTime,
             j.mrDate,
@@ -3732,7 +4056,7 @@ function exportExcel(_extWb, _sheetSuffix, _filename){
 
           vals.forEach((v,ci)=>{
             let sty;
-            // Col: 0=Sr,1=JCNO,2=Code,3=Name,4=Cust,5=Qty,6=Cut,7=Dim,8=ItemType,9=Status,10=RevDate,11=PlanMach,12-17=Units,18=Coat,19=Lam,20=MR,21=MRTime,22=MRDate,23=PSTime,24=PSDate,25=ETime,26=EDate
+            // Col: 0=Sr,1=JCNO,2=Code,3=Name,4=Cust,5=Qty,6=Cut,7=Dim,8=ItemType,9=Status,10=RevDate,11=PlanMach,12-17=Units,18=Coat,19=Lam,20=RMStatus,21=MR,22=MRTime,23=MRDate,24=PSTime,25=PSDate,26=ETime,27=EDate
             const BDR={top:{style:'thin',color:{rgb:'000000'}},bottom:{style:'thin',color:{rgb:'000000'}},left:{style:'thin',color:{rgb:'000000'}},right:{style:'thin',color:{rgb:'000000'}}};
     const BDR_MED={top:{style:'medium',color:{rgb:'000000'}},bottom:{style:'medium',color:{rgb:'000000'}},left:{style:'medium',color:{rgb:'000000'}},right:{style:'medium',color:{rgb:'000000'}}};
             function addBorder(st){return {...st,border:BDR};}
@@ -3741,9 +4065,14 @@ function exportExcel(_extWb, _sheetSuffix, _filename){
               ?{font:{bold:true,sz:9,color:{rgb:'991B1B'}},fill:{fgColor:{rgb:'FEE2E2'}},alignment:{horizontal:'center',vertical:'center'}}
               :{font:{sz:9,color:{rgb:'166534'}},fill:{fgColor:{rgb:'F0FDF4'}},alignment:{horizontal:'center',vertical:'center'}});
             else if(ci>=12&&ci<=17) sty=addBorder(inkStyle(j.inkUnits[ci-12]));
-            else if(ci===20) sty=addBorder(S.MR);
-            else if(ci===21||ci===23||ci===25) sty=addBorder(S.TIME);
-            else if(ci===22||ci===24||ci===26) sty=addBorder({...S.TIME,font:{sz:9,color:{rgb:'166534'}},fill:{fgColor:{rgb:'F0FDF4'}}});
+            else if(ci===20) sty=addBorder(j.rmAvailable===true
+              ?{font:{bold:true,sz:9,color:{rgb:'166534'}},fill:{fgColor:{rgb:'F0FDF4'}},alignment:{horizontal:'center',vertical:'center'}}
+              :j.rmAvailable===false
+              ?{font:{bold:true,sz:9,color:{rgb:'991B1B'}},fill:{fgColor:{rgb:'FEE2E2'}},alignment:{horizontal:'center',vertical:'center'}}
+              :{font:{sz:9,color:{rgb:'64748B'}},alignment:{horizontal:'center',vertical:'center'}});
+            else if(ci===21) sty=addBorder(S.MR);
+            else if(ci===22||ci===24||ci===26) sty=addBorder(S.TIME);
+            else if(ci===23||ci===25||ci===27) sty=addBorder({...S.TIME,font:{sz:9,color:{rgb:'166534'}},fill:{fgColor:{rgb:'F0FDF4'}}});
             else sty=addBorder(rowSty);
             sc(ws,row,ci,v,sty);
           });
