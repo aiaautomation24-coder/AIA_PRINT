@@ -1259,8 +1259,24 @@ const SEGS = [
 // seg0: 0–390, seg1: 390–690, seg2: 690–900, seg3: 900–1350
 const SEG_STARTS = [0, 390, 690, 900]; // wm offset within day where each seg starts
 
-let BASE = new Date(); BASE.setHours(0,0,0,0);
+// Use IST (UTC+5:30) for BASE to avoid midnight UTC offset causing wrong date
+let BASE = (function(){
+  const now = new Date();
+  // Convert to IST: offset = 330 min
+  const istMs = now.getTime() + (5*60+30)*60*1000 + now.getTimezoneOffset()*60*1000;
+  const ist = new Date(istMs);
+  const d = new Date(ist.getFullYear(), ist.getMonth(), ist.getDate(), 0, 0, 0, 0);
+  return d;
+})();
 let HOLIDAYS = new Map();
+
+function dkToday(){
+  // Returns today's date key in YYYY-MM-DD using IST (UTC+5:30)
+  const now = new Date();
+  const istMs = now.getTime() + (5*60+30)*60*1000 + now.getTimezoneOffset()*60*1000;
+  const ist = new Date(istMs);
+  return ist.getFullYear()+'-'+String(ist.getMonth()+1).padStart(2,'0')+'-'+String(ist.getDate()).padStart(2,'0');
+}
 
 function dk(d){
   return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
@@ -1502,7 +1518,14 @@ function parseJobs(rows){
       (!isNaN(frontColorNum) && frontColorNum===1) ||
       (!isNaN(backColorNum1) && backColorNum1===1)
     );
-    const mach = redirectTo2Col ? '2Col' : detectMachine(pm);
+    // ── FRONTCOLOR-BASED MACHINE ROUTING (final decider, overrides Plan Machine text) ──
+    // FrontColor <= 2        → 2Col
+    // FrontColor = 3 or 4    → CD74 4Col
+    // FrontColor > 4         → CD74 6Col
+    // If FrontColor missing/invalid → fallback to existing Plan Machine based detection
+    const mach = !isNaN(frontColorNum)
+      ? (frontColorNum<=2 ? '2Col' : (frontColorNum===3||frontColorNum===4) ? '4Col' : '6Col')
+      : (redirectTo2Col ? '2Col' : detectMachine(pm));
     if(!mach) return;
     const jcno=String(gv(r,'JC NO','JCNO')||'').trim();
     if(!jcno||seen.has(jcno.toUpperCase())) return;
@@ -1523,6 +1546,8 @@ function parseJobs(rows){
     // RM Status / Board Status — "Avl." / "Available" = material available → schedule first
     const rmRaw=String(gv(r,'BoardStatus','Board\nStatus ','Board Status','rm status UPDATE 1.7.2024')||'').trim().toLowerCase();
     const rmAvailable = rmRaw.includes('avl') || rmRaw.includes('available') || rmRaw.includes('yes');
+    // Raw rm status from "rm status" column (col CC in XLSM) — for Excel export display
+    const rmStatusRaw=String(gv(r,'rm status','rm_status','rmstatus')||'').trim();
     // frontColor / backColor already declared above (for machine redirect logic)
     const job={
       jcno, code:String(gv(r,'code','Code')||'').trim(),
@@ -1534,7 +1559,7 @@ function parseJobs(rows){
       status, planMach:pm, mach, inkUnits,
       coatDetail:String(gv(r,'CoatDetail')||'').replace(/[\r\n]+/g,' ').trim(),
       lamDetail:String(gv(r,'LamDetail')||'').replace(/[\r\n]+/g,' ').trim(),
-      urgent:false, rmAvailable,
+      urgent:false, rmAvailable, rmStatusRaw,
       frontColor, backColor,
       revDate: (()=>{
         // Direct fuzzy scan on all row keys — handles any spelling/spacing variant
@@ -1641,7 +1666,7 @@ function buildSchedule(){
   machLast={'4Col':null,'6Col':null,'2Col':null};
 
   // Sort per machine: if manualOrder set → use that, else auto-sort
-  const todayKey=dk(new Date());
+  const todayKey=dkToday();
   // 1-month window: today + 30 days
   const oneMonthLater=(()=>{const d=new Date();d.setDate(d.getDate()+30);return dk(d);})();
 
@@ -1728,6 +1753,14 @@ function buildSchedule(){
     if(mach==='6Col' && uvDates.size>0){
       uv6Ordered=ordered.filter(j=>uvSelectedJobs.has(j.jcno));
       ordered=ordered.filter(j=>!uvSelectedJobs.has(j.jcno));
+      // Group same-code UV jobs together so they benefit from mrSame (0 MR)
+      // Sort: keep relative priority order but cluster same codes consecutively
+      const codeOrder=[]; const codeSeen={};
+      uv6Ordered.forEach(j=>{ const c=j.code||''; if(!codeSeen[c]){codeSeen[c]=true;codeOrder.push(c);} });
+      uv6Ordered.sort((a,b)=>{
+        const ca=codeOrder.indexOf(a.code||''), cb=codeOrder.indexOf(b.code||'');
+        return ca-cb;
+      });
     }
     sorted.push(...ordered);
   });
@@ -2071,19 +2104,34 @@ function closeUVJobModal(){
 function renderUVJobList(){
   const el=document.getElementById('uvJobList');
   if(!el) return;
-  const q=(document.getElementById('uvJobSearch').value||'').toLowerCase();
+  const raw=(document.getElementById('uvJobSearch').value||'').trim();
+  const q=raw.toLowerCase();
+  // Support pasting/typing multiple JCNos (space, comma, or newline separated) —
+  // matching jobs get auto-added to uvSelectedJobs so they land in the selected list.
+  const tokens=raw.split(/[,\s\n]+/).map(t=>t.trim().toLowerCase()).filter(Boolean);
+  const isMultiPaste = tokens.length>1;
+  if(isMultiPaste){
+    clean.forEach(j=>{
+      if(j.mach==='6Col' && tokens.includes((j.jcno||'').toLowerCase())) uvSelectedJobs.add(j.jcno);
+    });
+  }
   const jobs=clean.filter(j=>j.mach==='6Col' &&
-    (!q || (j.jcno||'').toLowerCase().includes(q) || (j.name||'').toLowerCase().includes(q)));
+    (!q || (isMultiPaste
+      ? tokens.includes((j.jcno||'').toLowerCase())
+      : (j.jcno||'').toLowerCase().includes(q) || (j.name||'').toLowerCase().includes(q))));
   if(!jobs.length){ el.innerHTML='<p class="no-jobs">No CD74 6Col jobs found</p>'; return; }
   el.innerHTML=jobs.map(j=>{
     const sel=uvSelectedJobs.has(j.jcno);
     const sugg=isUVJob(j);
+    const sameCodeJobs=jobs.filter(x=>x.code&&j.code&&x.code.trim()===j.code.trim()&&x.jcno!==j.jcno);
+    const hasSameCode=sameCodeJobs.length>0;
     return `<label style="display:flex;align-items:center;gap:10px;padding:7px 10px;border-bottom:1px solid #1e3048;cursor:pointer;font-size:11px;color:#e2e8f0;">
       <input type="checkbox" data-jcno="${j.jcno}" ${sel?'checked':''} onchange="updateUVJobCount()" style="width:16px;height:16px;accent-color:#7c3aed;">
       <span style="flex:1;">
         <b>${j.jcno}</b> — ${(j.name||'').slice(0,46)}<br>
         <span style="color:#64748b;">${j.cust||''} · Qty ${j.qty} · Cut ${j.cut} ${j.lamDetail?(' · Lam: '+j.lamDetail.slice(0,20)):''} ${j.coatDetail?(' · Coat: '+j.coatDetail.slice(0,20)):''}</span>
       </span>
+      ${hasSameCode?`<span style="background:#FEF3C7;color:#92400E;border:1px solid #FDE68A;padding:1px 6px;border-radius:8px;font-size:9px;font-weight:700;" title="Same code: ${j.code}">🔗 Same Code</span>`:''}
       ${sugg?'<span style="background:#F3E8FF;color:#7c3aed;border:1px solid #DDD6FE;padding:1px 6px;border-radius:8px;font-size:9px;font-weight:700;">✨ Suggested</span>':''}
     </label>`;
   }).join('');
@@ -2190,7 +2238,7 @@ function renderWeekPlan(){
 
   const dayNames=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
   const startD=new Date(startVal+'T12:00:00');
-  const todayKeyWP=dk(new Date());
+  const todayKeyWP=dkToday();
 
   let html=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;">`;
   for(let i=0;i<7;i++){
@@ -2325,7 +2373,7 @@ function renderJobCard(j){
   const stagcls=j.urgent?'p-urg':j.status==='FRONT BAL'?'p-fb':j.status==='2ND PASS'?'p-2p':'p-jns';
 
   // Revised commitment date badge
-  const todKey=dk(new Date());
+  const todKey=dkToday();
   let revBadge='';
   if(j.revDate){
     const rd=new Date(j.revDate+'T12:00:00');
@@ -2381,7 +2429,7 @@ function renderJobCard(j){
       <span>📐 <b>${j.dim}</b></span>
       ${j.itemType?`<span>📄 ${j.itemType}</span>`:''}
       ${j.coatDetail?`<span>🎨 ${j.coatDetail.slice(0,22)}</span>`:''}
-      ${j.revDate?(j.revDate<dk(new Date())?`<span style="color:#dc2626;font-weight:700;">🔴 Rev: ${j.revDate}</span>`:`<span style="color:#166534;">📅 Rev: ${j.revDate}</span>`):''}
+      ${j.revDate?(j.revDate<dkToday()?`<span style="color:#dc2626;font-weight:700;">🔴 Rev: ${j.revDate}</span>`:`<span style="color:#166534;">📅 Rev: ${j.revDate}</span>`):''}
       ${aquaUvAssign[j.jcno]==='aqua'?`<span style="color:#0891b2;font-weight:700;">💧 AQUA</span>`:aquaUvAssign[j.jcno]==='uv'?`<span style="color:#7c3aed;font-weight:700;">⚡ UV</span>`:''}
       ${j.isUV?`<span style="color:#7c3aed;font-weight:700;background:#F3E8FF;border:1px solid #DDD6FE;padding:1px 5px;border-radius:8px;">⚡ UV DAY</span>`:''}
     </div>
@@ -2422,7 +2470,7 @@ function renderTable(){
       <td style="font-family:'JetBrains Mono',monospace;font-size:10px;">${j.dim}</td>
       <td><span class="pill ${mc}">${MACHINES[j.mach].label}</span></td>
       <td><span class="pill ${sc}">${j.status}</span></td>
-      <td>${j.revDate?(j.revDate<dk(new Date())?`<span style="color:#991B1B;font-weight:700;font-size:10px;">🔴 ${j.revDate}</span>`:`<span style="color:#166534;font-size:10px;">${j.revDate}</span>`):'<span style="color:#94A3B8;">—</span>'}</td>
+      <td>${j.revDate?(j.revDate<dkToday()?`<span style="color:#991B1B;font-weight:700;font-size:10px;">🔴 ${j.revDate}</span>`:`<span style="color:#166534;font-size:10px;">${j.revDate}</span>`):'<span style="color:#94A3B8;">—</span>'}</td>
       <td>${cpills}</td>
       <td style="font-family:'JetBrains Mono',monospace;font-size:10px;">${j.sameCodeNote?'0m (SC)':j.mr+'m'}</td>
       <td style="font-family:'JetBrains Mono',monospace;">${j.mrTime}</td><td>${j.mrDate}</td>
@@ -2461,7 +2509,7 @@ function setTab(t){
   if(t==='miss'){
     if(!missDateFilter){
       const df=document.getElementById('missDateFilter');
-      if(df&&!df.value){ df.value=dk(new Date()); missDateFilter=df.value; }
+      if(df&&!df.value){ df.value=dkToday(); missDateFilter=df.value; }
     }
     renderMissReport();
   }
@@ -2498,7 +2546,7 @@ function openMO(mach){
   if(!machJobs.length){toast('⚠️ '+machLabel[mach]+': No jobs scheduled on this date!');return;}
 
   // Build working order: use existing manualOrder or auto-sorted
-  const todayKey=dk(new Date());
+  const todayKey=dkToday();
   function isOverdue(j){return j.revDate&&j.revDate<todayKey;}
   let baseOrder;
   if(manualOrder[mach]){
@@ -2537,7 +2585,7 @@ function renderMOList(){
   const mach=_moMach;
   const is6col=mach==='6Col';
   const jobMap=new Map(clean.map(j=>[j.jcno,j]));
-  const todKey=dk(new Date());
+  const todKey=dkToday();
 
   const container=document.getElementById('moJobList');
   container.innerHTML='';
@@ -2682,7 +2730,7 @@ function moDragEnd(){}
 
 function moSortByRevDate(){
   const jobMap=new Map(clean.map(j=>[j.jcno,j]));
-  const todKey=dk(new Date());
+  const todKey=dkToday();
   _moTempOrder.sort((a,b)=>{
     const ja=jobMap.get(a), jb=jobMap.get(b);
     if(!ja||!jb) return 0;
@@ -2742,7 +2790,7 @@ function moAutoSort(){
   manualOrder[_moMach]=null;
   // Rebuild temp order from auto sort
   const machJobs=clean.filter(j=>j.mach===_moMach);
-  const todayKey=dk(new Date());
+  const todayKey=dkToday();
   function isOverdue(j){return j.revDate&&j.revDate<todayKey;}
   const sorted=[...machJobs].sort((a,b)=>{
     if(a.urgent!==b.urgent) return a.urgent?-1:1;
@@ -3079,7 +3127,7 @@ function renderCal(){
   document.getElementById('calLbl').textContent=M[_cm]+' '+_cy;
   const sd=new Date(_cy,_cm,1).getDay();
   const nd2=new Date(_cy,_cm+1,0).getDate();
-  const tod=dk(new Date());
+  const tod=dkToday();
   let h='';
   for(let i=0;i<sd;i++) h+='<div></div>';
   for(let d=1;d<=nd2;d++){
@@ -3110,7 +3158,7 @@ function print7DayPlan(){
   if(!sched.length){toast('⚠️ Pehle schedule banvao!');return;}
 
   // Get next 7 working days from today
-  const todayKey=dk(new Date());
+  const todayKey=dkToday();
   const workDays=[];
   let cursor=new Date();
   cursor.setHours(12,0,0,0);
@@ -3158,7 +3206,7 @@ function print7DayPlan(){
   // Day=4%, each machine group = 32% split across 5 cols
   const colW=['4%','5%','16%','7%','7%','8%','7%'];// day + 6 cols × 3 machines
   const subHdrs=['#','Job / JCNO','Qty · Cut','St / Rev','Colours','MR→Prn→End'];
-  const todKey=dk(new Date());
+  const todKey=dkToday();
   const CBGFG3={BLACK:'111111|FFFFFF',GREY:'9CA3AF|FFFFFF',SILVER:'C0C0C0|222222',MAGENTA:'DB2777|FFFFFF',RED:'DC2626|FFFFFF',PINK:'F9A8D4|831843',BROWN:'92400E|FFFFFF',MAROON:'7F1D1D|FFFFFF',PURPLE:'6D28D9|FFFFFF',VIOLET:'7C3AED|FFFFFF',ORANGE:'EA580C|FFFFFF',CYAN:'0891B2|FFFFFF',BLUE:'1D4ED8|FFFFFF',GREEN:'15803D|FFFFFF',BUFF:'B45309|FFFFFF',YELLOW:'CA8A04|FFFFFF',WHITE:'F1F5F9|374151'};
 
   html+='<table><colgroup><col style="width:4%">';
@@ -3493,7 +3541,7 @@ function setPrioFilter(btn,mach){
 function renderPrioList(){
   const rawSearch=(document.getElementById('prioSearch')||{value:''}).value;
   const custFilter=(document.getElementById('prioCustFilter')||{value:''}).value.toLowerCase();
-  const todKey=dk(new Date());
+  const todKey=dkToday();
 
   // Bulk JCNo detection: comma/newline/semicolon/space separated
   const isBulk = /[,;\n]/.test(rawSearch) || /\s{1,}/.test(rawSearch.trim()) && rawSearch.trim().split(/\s+/).length > 1;
@@ -3746,7 +3794,7 @@ function renderDelayedReport(){
   const el=document.getElementById('delayedContent');
   if(!el) return;
   if(!sched.length){el.innerHTML='<p class="no-jobs">Generate schedule first.</p>';return;}
-  const todKey=dk(new Date());
+  const todKey=dkToday();
   const delayed=sched.filter(j=>j.revDate && j.revDate<todKey);
   const cntEl=document.getElementById('delayedCount');
   if(cntEl) cntEl.textContent=delayed.length+' delayed jobs';
@@ -3795,7 +3843,7 @@ function renderDelayedReport(){
 function exportDelayedReport(){
   if(!sched.length){toast('⚠️ Generate schedule first');return;}
   if(typeof XLSX==='undefined'){toast('❌ XLSX not loaded');return;}
-  const todKey=dk(new Date());
+  const todKey=dkToday();
   const delayed=sched.filter(j=>j.revDate && j.revDate<todKey).sort((a,b)=>a.revDate<b.revDate?-1:1);
   if(!delayed.length){toast('✅ No delayed jobs to export!');return;}
   const rows=[['Machine','JCNO','Job Name','Customer','Rev Commit Date','Days Late','Sched MR Start','Sched Complete','Cut Sheets','Status']];
@@ -3806,14 +3854,14 @@ function exportDelayedReport(){
   const wb=XLSX.utils.book_new();
   const ws=XLSX.utils.aoa_to_sheet(rows);
   XLSX.utils.book_append_sheet(wb,ws,'Delayed Jobs');
-  const fname=`AIA_Delayed_Report_${dk(new Date())}.xlsx`;
+  const fname=`AIA_Delayed_Report_${dkToday()}.xlsx`;
   XLSX.writeFile(wb,fname);
   toast(`📥 ${delayed.length} delayed jobs exported!`);
 }
 
 function mailDelayedReport(){
   if(!sched.length){toast('⚠️ Generate schedule first');return;}
-  const todKey=dk(new Date());
+  const todKey=dkToday();
   const delayed=sched.filter(j=>j.revDate && j.revDate<todKey).sort((a,b)=>a.revDate<b.revDate?-1:1);
   if(!delayed.length){toast('✅ No delayed jobs!');return;}
   const subject=`AIA Delayed Jobs Report — ${new Date().toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})} — ${delayed.length} Jobs`;
@@ -3829,6 +3877,14 @@ function mailDelayedReport(){
 // ══════════════════════════════════════════════
 function exportExcel(_extWb, _sheetSuffix, _filename){
   if(!sched.length){toast('⚠️ Pehle schedule banvao!');return;}
+
+  // ── Date format helpers (DD-MM-YYYY for all Excel date cells) ──
+  function fmtDateDMY(ymd){
+    if(!ymd||ymd==='—'||ymd==='-') return ymd||'';
+    const m=String(ymd).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return m?`${m[3]}-${m[2]}-${m[1]}`:ymd;
+  }
+  function fmtSchedDate(dayKey){ return fmtDateDMY(dayKey); }
 
   const wb2=_extWb||XLSX.utils.book_new();
 
@@ -3854,6 +3910,7 @@ function exportExcel(_extWb, _sheetSuffix, _filename){
     BLANK:{font:{sz:9},fill:{fgColor:{rgb:'F5F8FC'}}},
     TOTAL:{font:{bold:true,sz:9,color:{rgb:'0D1B2A'}},fill:{fgColor:{rgb:'E2E8F0'}},alignment:{horizontal:'center',vertical:'center'},border:{top:{style:'thin',color:{rgb:'000000'}},bottom:{style:'thin',color:{rgb:'000000'}},left:{style:'thin',color:{rgb:'000000'}},right:{style:'thin',color:{rgb:'000000'}}}},
     COLGP:{font:{bold:true,sz:9,color:{rgb:'374151'}},fill:{fgColor:{rgb:'EEF2F8'}},alignment:{vertical:'center'}},
+    UV:   {font:{bold:true,sz:9,color:{rgb:'5B21B6'}},fill:{fgColor:{rgb:'EDE9FE'}},alignment:{vertical:'center',wrapText:true}},
   };
 
   function sc(ws,r,c,v,s){
@@ -3983,7 +4040,7 @@ function exportExcel(_extWb, _sheetSuffix, _filename){
         // Job rows
         let sr=1;
         mjobs.forEach(j=>{
-          const rowSty=j.urgent?S.URG:j.status==='FRONT BAL'?S.FB:j.status==='2ND PASS'?S.P2:S.JNS;
+          const rowSty=j.isUV?S.UV:j.urgent?S.URG:j.status==='FRONT BAL'?S.FB:j.status==='2ND PASS'?S.P2:S.JNS;
           const mrNote=j.sameCodeNote?`0 (Same Code)`:`${j.mr} (New)`;
 
           // Colour bg map for ink cells
@@ -4032,7 +4089,7 @@ function exportExcel(_extWb, _sheetSuffix, _filename){
             j.dim,
             j.itemType,
             j.status,
-            j.revDate||'',
+            fmtDateDMY(j.revDate)||'',
             j.planMach,
             inkVal(j.inkUnits[0]),
             inkVal(j.inkUnits[1]),
@@ -4042,14 +4099,14 @@ function exportExcel(_extWb, _sheetSuffix, _filename){
             inkVal(j.inkUnits[5]),
             j.coatDetail,
             j.lamDetail||'',
-            j.rmAvailable===true?'Available':j.rmAvailable===false?'Wait':'—',
+            j.rmStatusRaw||( j.rmAvailable===true?'Available':j.rmAvailable===false?'Wait':'—' ),
             mrNote,
             j.mrTime,
-            j.mrDate,
+            fmtSchedDate(j.mrKey),
             j.psTime,
-            j.psDate,
+            fmtSchedDate(j.psKey),
             j.eTime,
-            j.eDate,
+            fmtSchedDate(j.eKey),
             j.frontColor||'',
             j.backColor||'',
           ];
@@ -4061,7 +4118,7 @@ function exportExcel(_extWb, _sheetSuffix, _filename){
     const BDR_MED={top:{style:'medium',color:{rgb:'000000'}},bottom:{style:'medium',color:{rgb:'000000'}},left:{style:'medium',color:{rgb:'000000'}},right:{style:'medium',color:{rgb:'000000'}}};
             function addBorder(st){return {...st,border:BDR};}
             if(ci===0) sty=addBorder(S.NUM);
-            else if(ci===10) sty=addBorder(j.revDate&&j.revDate<dk(new Date())
+            else if(ci===10) sty=addBorder(j.revDate&&j.revDate<dkToday()
               ?{font:{bold:true,sz:9,color:{rgb:'991B1B'}},fill:{fgColor:{rgb:'FEE2E2'}},alignment:{horizontal:'center',vertical:'center'}}
               :{font:{sz:9,color:{rgb:'166534'}},fill:{fgColor:{rgb:'F0FDF4'}},alignment:{horizontal:'center',vertical:'center'}});
             else if(ci>=12&&ci<=17) sty=addBorder(inkStyle(j.inkUnits[ci-12]));
@@ -4113,7 +4170,7 @@ function exportExcel(_extWb, _sheetSuffix, _filename){
   });
 
   // ── OVERDUE JOBS SHEET ──
-  const todKeyExp=dk(new Date());
+  const todKeyExp=dkToday();
   const overdueJobs=sched.filter(j=>j.revDate&&j.revDate<todKeyExp);
 
   if(overdueJobs.length>0){
@@ -4197,8 +4254,8 @@ function exportExcel(_extWb, _sheetSuffix, _filename){
           j.name,
           j.cust,
           j.status,
-          `${j.revDate} (${daysOverdue}d late)`,
-          `${j.mrDate} — ${j.eDate}`,  // MR date → Complete date
+          `${fmtDateDMY(j.revDate)} (${daysOverdue}d late)`,
+          `${fmtSchedDate(j.mrKey)} — ${fmtSchedDate(j.eKey)}`,  // MR date → Complete date
           j.qty,
           j.cut,
           j.dim,
@@ -4596,7 +4653,7 @@ function exportMissReport(){
     const dayName=dObj.toLocaleDateString('en-IN',{weekday:'long'});
 
     // Day header
-    sc(ws,row,0,`📅 ${dayName.toUpperCase()} — ${dayKey}`,S_DAY);
+    sc(ws,row,0,`📅 ${dayName.toUpperCase()} — ${dayKey.split('-').reverse().join('-')}`,S_DAY);
     merge(ws,row,0,row,NC-1); ws['!rows'][row]={hpt:16}; row++;
 
     ['4Col','6Col','2Col'].forEach(mach=>{
@@ -4623,7 +4680,7 @@ function exportMissReport(){
         const stSt = isMissed ? S_MISS : S_OK;
 
         ws['!rows'][row]={hpt:15};
-        sc(ws,row,0,dayKey,mSt);
+        sc(ws,row,0,dayKey.split('-').reverse().join('-'),mSt);
         sc(ws,row,1,dayName,nSt);
         sc(ws,row,2,MACHINES[mach].label,nSt);
         sc(ws,row,3,j.jcno,mSt);
@@ -4662,7 +4719,7 @@ function exportMissReport(){
   ws['!ref']='A1:'+XLSX.utils.encode_col(NC-1)+row;
   XLSX.utils.book_append_sheet(wb,ws,'📋 Miss Report');
 
-  const fname=`AIA_Miss_Report_${dk(new Date())}.xlsx`;
+  const fname=`AIA_Miss_Report_${dkToday()}.xlsx`;
   XLSX.writeFile(wb,fname);
   toast(`📥 Miss Report exported! ${grandMissed} missed · ${grandDone} completed`);
 }
@@ -4778,7 +4835,7 @@ function export7DayExcel(){
         sc(ws,row,baseC+6,clrs,{...nSt,alignment:{horizontal:'center'}});
         sc(ws,row,baseC+7,j.mrTime,mSt);
         sc(ws,row,baseC+8,j.psTime,mSt);
-        sc(ws,row,baseC+9,j.eTime+'  '+j.eDate,mSt);
+        sc(ws,row,baseC+9,j.eTime+'  '+(j.eKey?(j.eKey.split('-').reverse().join('-')):j.eDate),mSt);
       });
       row++;
     }
@@ -4793,7 +4850,7 @@ function export7DayExcel(){
   ws['!ref']='A1:'+XLSX.utils.encode_col(totalCols-1)+row;
 
   XLSX.utils.book_append_sheet(wb,ws,'7 Days Plan');
-  const fname=`AIA_7Days_Plan_${dk(new Date())}.xlsx`;
+  const fname=`AIA_7Days_Plan_${dkToday()}.xlsx`;
   XLSX.writeFile(wb,fname);
   toast('📥 7 Days Plan Excel exported!');
 }
@@ -4828,7 +4885,7 @@ function toast(msg){
 
 // Init
 document.getElementById('topDate').textContent=new Date().toLocaleDateString('en-IN',{weekday:'short',day:'2-digit',month:'short',year:'numeric'});
-document.getElementById('bdDate').value=dk(new Date());
+document.getElementById('bdDate').value=dkToday();
 </script>
 </body>
 </html>
