@@ -497,7 +497,6 @@ tbody td{padding:7px 10px;vertical-align:middle;}
       <div class="gen-sub" id="schedSub"></div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
-      <button class="btn btn-orange" onclick="buildSchedule()">🔄 Regenerate</button>
       <button class="btn btn-outline btn-sm" onclick="openPriorityModal()" style="border-color:#F97316;color:#F97316;">🎯 Priority Select</button>
       <button class="btn btn-outline btn-sm" onclick="exportExcel()">📥 Export Excel</button>
       <button class="btn btn-outline btn-sm" onclick="goPg(1)">← Re-upload</button>
@@ -532,9 +531,6 @@ tbody td{padding:7px 10px;vertical-align:middle;}
       </button>
       <button onclick="setTab('uv')" style="display:inline-flex;align-items:center;gap:7px;padding:6px 14px;border-radius:20px;border:2px solid #7c3aed;background:#1a0a2a;color:#c4b5fd;font-size:11px;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif;transition:all .2s;">
         ⚡ UV Schedule
-      </button>
-      <button onclick="setTab('weekplan')" style="display:inline-flex;align-items:center;gap:7px;padding:6px 14px;border-radius:20px;border:2px solid #3B82F6;background:#0a1a2a;color:#93c5fd;font-size:11px;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif;transition:all .2s;">
-        📆 Week Planning
       </button>
     </div>
     <!-- Row 2: Breakdown -->
@@ -725,7 +721,6 @@ tbody td{padding:7px 10px;vertical-align:middle;}
         <div id="uvCalendar"></div>
         <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
           <button onclick="openUVJobPicker()" style="background:#7c3aed;border:none;color:#fff;font-size:11px;font-weight:700;padding:6px 14px;border-radius:6px;cursor:pointer;">📋 Select UV Jobs</button>
-          <button onclick="if(sched.length) buildSchedule(); else toast('⚠️ Pehle schedule banvao!');" style="background:#166534;border:none;color:#fff;font-size:11px;font-weight:700;padding:6px 14px;border-radius:6px;cursor:pointer;">🔄 Apply Dates → Rebuild</button>
           <button onclick="clearUVDates()" style="background:#1e293b;border:1px solid #334155;color:#cbd5e1;font-size:11px;padding:5px 12px;border-radius:6px;cursor:pointer;">✖ Clear UV Dates</button>
         </div>
         <div id="uvPendingInfo" style="margin-top:10px;"></div>
